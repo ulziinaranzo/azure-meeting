@@ -28,10 +28,6 @@ type TranscriptJobState = {
 const transcriptJobs = new Map<string, TranscriptJobState>();
 const JOB_TTL_MS = 6 * 60 * 60 * 1000;
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function safeJsonParse<T>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
@@ -49,7 +45,7 @@ function toRecord(value: unknown): JsonRecord | null {
 }
 
 function toBoolean(value: unknown): boolean {
-  return value === true;
+  return value === true || value === "true";
 }
 
 function toNumber(value: unknown): number | undefined {
@@ -239,7 +235,7 @@ function parseTranscriptResponse(raw: string): TranscriptParseResult {
     };
   }
 
-  // Chimege transcript response often comes as:
+  // Chimege ихэвчлэн ингэж буцааж болно:
   // [{ done: true, transcription: "...", duration: 0 }]
   if (Array.isArray(parsed)) {
     const texts = parsed
@@ -292,7 +288,10 @@ function cleanupTranscriptJobs(): void {
   }
 }
 
-export function getOrCreateJob(uuid: string, duration?: number): TranscriptJobState {
+export function getOrCreateJob(
+  uuid: string,
+  duration?: number
+): TranscriptJobState {
   const existing = transcriptJobs.get(uuid);
 
   if (existing) {
@@ -364,7 +363,9 @@ export async function uploadToChimege(
   };
 }
 
-async function fetchTranscriptCandidate(uuid: string): Promise<TranscriptCandidate> {
+async function fetchTranscriptCandidate(
+  uuid: string
+): Promise<TranscriptCandidate> {
   const response = await fetch(config.chimegeTranscriptEndpoint, {
     method: "GET",
     headers: {
@@ -410,12 +411,7 @@ export async function getTranscriptStatus(uuid: string): Promise<{
 
   const job = getOrCreateJob(uuid);
 
-  if (job.lastCheckedAt && Date.now() - job.lastCheckedAt < 1200) {
-    await sleep(1200);
-  }
-
   const best = await fetchTranscriptCandidate(uuid);
-
   const currentText = normalizeText(best.text);
 
   if (currentText.length > job.bestTranscript.length) {
@@ -433,14 +429,15 @@ export async function getTranscriptStatus(uuid: string): Promise<{
 
   job.lastCheckedAt = Date.now();
 
-  const isDone =
-    best.isFinal ||
-    (job.bestTranscript.length > 0 && job.stableCount >= 4);
+  // Хурдан хувилбар:
+  // - Chimege done=true өгвөл done
+  // - done flag алга байсан ч transcript текст гарсан бол шууд done
+  const isDone = best.isFinal || job.bestTranscript.length > 0;
 
   return {
     status: isDone ? "done" : "processing",
     isFinal: isDone,
-    transcript: isDone ? job.bestTranscript : job.bestTranscript || currentText,
+    transcript: job.bestTranscript || currentText,
     duration: job.duration,
     progress: best.progress,
     stableCount: job.stableCount,
