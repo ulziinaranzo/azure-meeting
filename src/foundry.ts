@@ -33,6 +33,25 @@ function bulletList(items: string[]): string {
   return items.map((item) => `- ${item}`).join("\n");
 }
 
+function uniqueItems(items: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of items) {
+    const cleaned = cleanBulletText(item);
+    const key = cleaned.toLowerCase();
+
+    if (!cleaned || cleaned === "-" || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(cleaned);
+  }
+
+  return result;
+}
+
 function cleanBulletText(value: string): string {
   return value
     .replace(/^[-•]\s*/, "")
@@ -99,6 +118,11 @@ function cleanTaskItems(text: string): string[] {
         "холбох",
         "тохируулах",
         "нэвтрүүлэх",
+        "хийх",
+        "бэлдэх",
+        "үүсгэх",
+        "илгээх",
+        "хянах",
         "full flow",
         "fallback"
       ].some((keyword) => sentence.toLowerCase().includes(keyword.toLowerCase()))
@@ -125,6 +149,33 @@ function cleanTaskItems(text: string): string[] {
     .slice(0, 8);
 }
 
+function cleanAdditionalTaskItems(text: string, existingTasks: string[]): string[] {
+  const existing = new Set(existingTasks.map((item) => item.toLowerCase()));
+  const sentences = splitSentences(text);
+
+  return sentences
+    .filter((sentence) =>
+      [
+        "шаардлагатай",
+        "үргэлжлүүл",
+        "дараагийн",
+        "нэмэлт",
+        "нэмж",
+        "follow-up",
+        "дахин",
+        "баталгаажуулах",
+        "хянах",
+        "шалгах",
+        "сайжруулах",
+        "шийдвэрлэх"
+      ].some((keyword) => sentence.toLowerCase().includes(keyword.toLowerCase()))
+    )
+    .map(cleanBulletText)
+    .filter(Boolean)
+    .filter((item) => !existing.has(item.toLowerCase()))
+    .slice(0, 6);
+}
+
 export function buildLocalFallbackSummary(
   transcript: string,
   summaryType: string
@@ -149,6 +200,10 @@ export function buildLocalFallbackSummary(
       .slice(0, 5);
 
     const actionItems = cleanTaskItems(safeTranscript);
+    const additionalActionItems = cleanAdditionalTaskItems(
+      safeTranscript,
+      actionItems
+    );
 
     return {
       summary: `1. Товч дүгнэлт
@@ -157,9 +212,15 @@ ${overview}
 2. Гол санаанууд
 ${bulletList(ideas)}
 
-3. Анхаарах зүйлс
+3. Хийх ажлууд
+${bulletList(actionItems)}
+
+4. Нэмж хийгдэх ажлууд
+${bulletList(additionalActionItems)}
+
+5. Анхаарах зүйлс
 ${bulletList(risks)}`,
-      actionItems,
+      actionItems: uniqueItems([...actionItems, ...additionalActionItems]),
       usedFallback: true
     };
   }
@@ -175,7 +236,9 @@ ${bulletList(risks)}`,
     extractAfterKeywords(safeTranscript, [
       "Дараагийн хийх ажил бол",
       "Дараагийн хийх ажил",
-      "дараагийн хийх ажил"
+      "дараагийн хийх ажил",
+      "хийх ажил",
+      "хийх ажлууд"
     ]) || safeTranscript;
 
   const riskItems = splitSentences(safeTranscript)
@@ -190,6 +253,10 @@ ${bulletList(risks)}`,
 
   const decisionItems = cleanDecisionItems(decisionText);
   const actionItems = cleanTaskItems(taskText);
+  const additionalActionItems = cleanAdditionalTaskItems(
+    safeTranscript,
+    actionItems
+  );
 
   return {
     summary: `1. Хурлын товч дүгнэлт
@@ -201,9 +268,12 @@ ${bulletList(decisionItems)}
 3. Хийх ажлууд
 ${bulletList(actionItems)}
 
-4. Эрсдэл / анхаарах зүйлс
+4. Нэмж хийгдэх ажлууд
+${bulletList(additionalActionItems)}
+
+5. Эрсдэл / анхаарах зүйлс
 ${bulletList(riskItems)}`,
-    actionItems,
+    actionItems: uniqueItems([...actionItems, ...additionalActionItems]),
     usedFallback: true
   };
 }
@@ -273,14 +343,17 @@ function normalizeActionItems(value: unknown): string[] {
     .slice(0, 10);
 }
 
-function extractActionItemsFromSummary(summary: string): string[] {
+function extractSectionItemsFromSummary(
+  summary: string,
+  sectionTitle: string
+): string[] {
   const lines = summary
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 
   const startIndex = lines.findIndex((line) =>
-    line.toLowerCase().includes("хийх аж")
+    line.toLowerCase().includes(sectionTitle.toLowerCase())
   );
 
   if (startIndex < 0) {
@@ -304,6 +377,16 @@ function extractActionItemsFromSummary(summary: string): string[] {
   }
 
   return items.slice(0, 10);
+}
+
+function extractActionItemsFromSummary(summary: string): string[] {
+  const directItems = extractSectionItemsFromSummary(summary, "Хийх ажлууд");
+  const additionalItems = extractSectionItemsFromSummary(
+    summary,
+    "Нэмж хийгдэх ажлууд"
+  );
+
+  return uniqueItems([...directItems, ...additionalItems]).slice(0, 12);
 }
 
 function removeAssistantPhrases(text: string): string {
@@ -351,20 +434,28 @@ Markdown, тайлбар, code block, reasoning бүү бич.
 
 JSON бүтэц яг ийм байна:
 {
-  "summary": "1. Хурлын товч дүгнэлт\\n...\\n\\n2. Гол шийдвэрүүд\\n- ...\\n\\n3. Хийх ажлууд\\n- ...\\n\\n4. Эрсдэл / анхаарах зүйлс\\n- ...",
+  "summary": "1. Хурлын товч дүгнэлт\\n...\\n\\n2. Гол шийдвэрүүд\\n- ...\\n\\n3. Хийх ажлууд\\n- ...\\n\\n4. Нэмж хийгдэх ажлууд\\n- ...\\n\\n5. Эрсдэл / анхаарах зүйлс\\n- ...",
   "actionItems": [
     "Хийх ажил 1",
-    "Хийх ажил 2"
+    "Нэмж хийгдэх ажил 1"
+  ],
+  "additionalActionItems": [
+    "Нэмж хийгдэх ажил 1"
   ]
 }
 
 Дүрэм:
 - "Хурлын товч дүгнэлт" хэсэгт transcript-ийг шууд хуулбарлахгүй, утгыг нь цэвэр дүгнэ.
 - "Гол шийдвэрүүд" хэсэгт зөвхөн шийдвэр, тохиролцоо, сонгосон чиглэлийг бич.
-- "Хийх ажлууд" хэсэгт зөвхөн цаашид хийх ажлыг бич.
+- "Хийх ажлууд" хэсэгт transcript дээр шууд дурдагдсан цаашид хийх ажлыг бич.
+- "Нэмж хийгдэх ажлууд" хэсэгт transcript-ийн агуулгаас логикоор зайлшгүй үргэлжлүүлэн хийх шаардлагатай follow-up ажлуудыг бич.
+- "Нэмж хийгдэх ажлууд" хэсэгт зохиомол, хамааралгүй, transcript-тэй холбоогүй ажил нэмэхгүй.
 - Өнгөрсөн үйл явдлыг action item болгож болохгүй.
-- actionItems array нь summary доторх "Хийх ажлууд" хэсэгтэй таарсан байна.
+- actionItems array нь "Хийх ажлууд" болон "Нэмж хийгдэх ажлууд" хоёр хэсгийн бүх ажлыг нэгтгэсэн байна.
+- additionalActionItems array нь зөвхөн "Нэмж хийгдэх ажлууд" хэсэгтэй таарсан байна.
 - Хэрэв эзэн хүн байхгүй бол эзэнгүйгээр бич.
+- Хэрэв хийх ажил байхгүй бол тухайн хэсэгт "-" гэж бич.
+- Хэрэв нэмж хийгдэх ажил байхгүй бол "Нэмж хийгдэх ажлууд" хэсэгт "-" гэж бич.
 - Хэрэв хийх ажил байхгүй бол actionItems хоосон array байна.
 - Монгол хэлээр бизнесийн цэвэр найруулгатай бич.
 - Өөрийгөө AI, chatbot, assistant гэж дурдахгүй.
@@ -385,16 +476,23 @@ Markdown, тайлбар, code block, reasoning бүү бич.
 
 JSON бүтэц:
 {
-  "summary": "1. Товч дүгнэлт\\n...\\n\\n2. Гол санаанууд\\n- ...\\n\\n3. Анхаарах зүйлс\\n- ...",
+  "summary": "1. Товч дүгнэлт\\n...\\n\\n2. Гол санаанууд\\n- ...\\n\\n3. Хийх ажлууд\\n- ...\\n\\n4. Нэмж хийгдэх ажлууд\\n- ...\\n\\n5. Анхаарах зүйлс\\n- ...",
   "actionItems": [
     "Хийх ажил 1",
-    "Хийх ажил 2"
+    "Нэмж хийгдэх ажил 1"
+  ],
+  "additionalActionItems": [
+    "Нэмж хийгдэх ажил 1"
   ]
 }
 
 Дүрэм:
 - Товч, цэвэр, ойлгомжтой бич.
-- actionItems дээр зөвхөн цаашид хийх ажлыг бич.
+- "Хийх ажлууд" дээр transcript дээр шууд дурдагдсан цаашид хийх ажлыг бич.
+- "Нэмж хийгдэх ажлууд" дээр transcript-ийн агуулгаас логикоор шаардлагатай follow-up ажлыг бич.
+- Зохиомол, transcript-тэй холбоогүй ажил нэмэхгүй.
+- actionItems дээр "Хийх ажлууд" болон "Нэмж хийгдэх ажлууд" хоёр хэсгийн ажлыг нэгтгэж бич.
+- additionalActionItems дээр зөвхөн "Нэмж хийгдэх ажлууд"-ыг бич.
 - Өнгөрсөн үйл явдлыг action item болгож болохгүй.
 - Өөрийгөө AI, chatbot, assistant гэж дурдахгүй.
 - Нэмэлт санал, асуулт, "хүсвэл" гэх төгсгөлийн өгүүлбэр бичихгүй.
@@ -477,7 +575,15 @@ export async function summarizeTranscript(params: {
 
     const summary = removeAssistantPhrases(parsed.summary.trim()) || "-";
 
-    let actionItems = normalizeActionItems(parsed.actionItems);
+    const directActionItems = normalizeActionItems(parsed.actionItems);
+    const additionalActionItems = normalizeActionItems(
+      parsed.additionalActionItems
+    );
+
+    let actionItems = uniqueItems([
+      ...directActionItems,
+      ...additionalActionItems
+    ]).slice(0, 12);
 
     if (!actionItems.length) {
       actionItems = extractActionItemsFromSummary(summary);
